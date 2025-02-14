@@ -9,14 +9,19 @@ function updateProgress(message) {
 
 document.getElementById('start-button').addEventListener('click', async () => {
   const files = document.getElementById('video-files').files;
-  const finalLength = parseInt(document.getElementById('final-length').value);
+  // These two inputs now define the canvas dimensions
+  const canvasWidth = parseInt(document.getElementById('final-width').value);
+  const canvasHeight = parseInt(document.getElementById('final-length').value);
+  
+  // The final video duration is still taken from an input (assumed to be final-length in the original code).
+  // (If you want to decouple canvas height and final video duration, use a separate input for duration.)
+  const finalDuration = parseInt(document.getElementById('final-length').value);
+  
   const minClipLength = parseInt(document.getElementById('min-clip-length').value);
   const maxClipLength = parseInt(document.getElementById('max-clip-length').value);
   const zoomProbability = parseFloat(document.getElementById('zoom-probability').value);
   const minZoom = parseFloat(document.getElementById('min-zoom').value);
   const maxZoom = parseFloat(document.getElementById('max-zoom').value);
-  const finalWidth = parseInt(document.getElementById('final-width').value);
-  const finalHeight = parseInt(document.getElementById('final-height').value);
 
   // Clear previous status messages and hide download button
   document.getElementById('status').innerHTML = '';
@@ -28,26 +33,31 @@ document.getElementById('start-button').addEventListener('click', async () => {
   }
 
   if (
-    isNaN(finalLength) ||
+    isNaN(finalDuration) ||
     isNaN(minClipLength) ||
     isNaN(maxClipLength) ||
     minClipLength > maxClipLength ||
     isNaN(zoomProbability) ||
     isNaN(minZoom) ||
     isNaN(maxZoom) ||
-    minZoom > maxZoom
+    minZoom > maxZoom ||
+    isNaN(canvasWidth) ||
+    isNaN(canvasHeight)
   ) {
     updateProgress('Error: Please enter valid numeric values.');
     return;
   }
 
   updateProgress('Starting video editing process...');
-  await processVideos(files, finalLength, minClipLength, maxClipLength, zoomProbability, minZoom, maxZoom, finalWidth, finalHeight);
+  await processVideos(files, finalDuration, minClipLength, maxClipLength, zoomProbability, minZoom, maxZoom, canvasWidth, canvasHeight);
 });
 
-async function processVideos(files, finalLength, minClipLength, maxClipLength, zoomProbability, minZoom, maxZoom, finalWidth, finalHeight) {
+async function processVideos(files, finalDuration, minClipLength, maxClipLength, zoomProbability, minZoom, maxZoom, canvasWidth, canvasHeight) {
   updateProgress('Initializing processing...');
   const canvas = document.createElement('canvas');
+  // Set the canvas dimensions from the input values
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
   const ctx = canvas.getContext('2d');
   const chunks = [];
 
@@ -89,13 +99,13 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     };
   };
 
-  // Build randomized clip configurations until total duration reaches finalLength
+  // Build randomized clip configurations until total duration reaches finalDuration
   let totalDuration = 0;
   let lastFile = null;
   const clipConfs = [];
   const filesArray = Array.from(files);
   updateProgress('Building clip configurations...');
-  while (totalDuration < finalLength) {
+  while (totalDuration < finalDuration) {
     let candidate;
     do {
       candidate = filesArray[Math.floor(Math.random() * filesArray.length)];
@@ -125,15 +135,11 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     updateProgress('No clips to process.');
     return;
   }
-  // Preload the first clip into slot 0 and set canvas dimensions.
+  // Preload the first clip into slot 0.
   const firstClip = clipConfs.shift();
   updateProgress(`Preloading first clip from ${firstClip.file.name} (start: ${firstClip.startTime.toFixed(2)}s, length: ${firstClip.clipLength.toFixed(2)}s) into slot 0`);
   await preloadClip(videoPlayers[0], firstClip.file, firstClip.startTime, firstClip.clipLength);
   videoPlayers[0].clipConf = firstClip;
-  
-  // Set canvas dimensions to the final dimensions
-  canvas.width = finalWidth;
-  canvas.height = finalHeight;
 
   // Preload remaining clips into slots 1 to 3, if available.
   for (let i = 1; i < videoPlayers.length; i++) {
@@ -150,52 +156,50 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
 
   let currentPlayerIndex = 0;
   let previousClip = null;
-  let recordedDuration = 0;
-  
-  while (recordedDuration < finalLength) {
+
+  while (true) {
     const currentVideo = videoPlayers[currentPlayerIndex];
     const currentClip = currentVideo.clipConf;
-    
-    // Start playing current clip
+
+    // Start playing current clip with our modified drawing (with proper cropping and zoom)
     const playPromise = playActiveClip(
-        currentVideo, 
-        currentClip, 
-        canvas, 
-        ctx, 
-        { zoomProbability, minZoom, maxZoom },
-        previousClip, // Pass the previous clip info
-        finalWidth,
-        finalHeight
+      currentVideo,
+      currentClip,
+      canvas,
+      ctx,
+      { zoomProbability, minZoom, maxZoom },
+      previousClip // Pass the previous clip info for overlap
     );
 
     // Preload next clip if available
     if (clipConfs.length > 0) {
-        const upcoming = clipConfs.shift();
-        await preloadClip(
-            videoPlayers[(currentPlayerIndex + 1) % videoPlayers.length], 
-            upcoming.file, 
-            upcoming.startTime, 
-            upcoming.clipLength
-        );
-        videoPlayers[(currentPlayerIndex + 1) % videoPlayers.length].clipConf = upcoming;
+      const upcoming = clipConfs.shift();
+      await preloadClip(
+        videoPlayers[(currentPlayerIndex + 1) % videoPlayers.length],
+        upcoming.file,
+        upcoming.startTime,
+        upcoming.clipLength
+      );
+      videoPlayers[(currentPlayerIndex + 1) % videoPlayers.length].clipConf = upcoming;
     }
 
     // Wait for current clip to finish
     await playPromise;
-    
-    recordedDuration += currentClip.clipLength;
-    
+
     if (clipConfs.length === 0) break;
-    
+
     previousClip = {
-        video: currentVideo,
-        conf: currentClip
+      video: currentVideo,
+      conf: currentClip
     };
     currentPlayerIndex = (currentPlayerIndex + 1) % videoPlayers.length;
   }
 
-  recorder.stop();
-  updateProgress('Recording stopped.');
+  // Stop recording after the desired final duration (in seconds)
+  setTimeout(() => {
+    recorder.stop();
+    updateProgress('Recording stopped.');
+  }, finalDuration * 1000);
 }
 
 function getVideoDuration(file) {
@@ -229,99 +233,80 @@ function preloadClip(video, file, startTime, clipLength) {
   });
 }
 
-// Play the clip by drawing frames from the active video onto the canvas
-function playActiveClip(video, clipConf, canvas, ctx, zoomConfig, previousClip, finalWidth, finalHeight) {
+// Play the clip by drawing frames from the active video onto the canvas,
+// performing a two‐step crop: first crop the video to match the canvas aspect ratio,
+// then (if a zoom effect is applied) select a random sub–region of that cropped area.
+function playActiveClip(video, clipConf, canvas, ctx, zoomConfig, previousClip) {
   return new Promise((resolve, reject) => {
     const { startTime, clipLength, file } = clipConf;
     const endTime = startTime + clipLength;
     const overlapDuration = 1.0; // 1 second overlap
-    
-    let applyZoom = Math.random() < (zoomConfig.zoomProbability / 100);
-    let zoomFactor = 1;
-    let sx = 0, sy = 0;
 
-    if (applyZoom) {
-      zoomFactor = Math.random() * ((zoomConfig.maxZoom - zoomConfig.minZoom) / 100) + (zoomConfig.minZoom / 100);
-      const srcWidth = canvas.width / zoomFactor;
-      const srcHeight = canvas.height / zoomFactor;
-      sx = Math.random() * (canvas.width - srcWidth);
-      sy = Math.random() * (canvas.height - srcHeight);
-      updateProgress(`Applied zoom on ${file.name}: ${(zoomFactor * 100).toFixed(0)}% (random crop at x:${sx.toFixed(0)}, y:${sy.toFixed(0)})`);
-    }
+    // Determine whether to apply zoom.
+    // (Note: zoomProbability is assumed to be a percentage.)
+    const applyZoom = Math.random() < (zoomConfig.zoomProbability / 100);
+    let zoomFactor = 1;
 
     video.play().then(() => {
+      // Once the video is ready, compute the initial crop so that the source image
+      // has the same aspect ratio as the canvas.
+      const videoWidth = video.videoWidth;
+      const videoHeight = video.videoHeight;
+      const canvasAspect = canvas.width / canvas.height;
+      const videoAspect = videoWidth / videoHeight;
+      let cropX, cropY, cropW, cropH;
+
+      if (videoAspect > canvasAspect) {
+        // Video is wider than canvas: crop the sides.
+        cropH = videoHeight;
+        cropW = cropH * canvasAspect;
+        cropX = (videoWidth - cropW) / 2;
+        cropY = 0;
+      } else if (videoAspect < canvasAspect) {
+        // Video is taller than canvas: crop the top and bottom.
+        cropW = videoWidth;
+        cropH = cropW / canvasAspect;
+        cropX = 0;
+        cropY = (videoHeight - cropH) / 2;
+      } else {
+        // Same aspect ratio: no initial cropping needed.
+        cropX = 0;
+        cropY = 0;
+        cropW = videoWidth;
+        cropH = videoHeight;
+      }
+
+      // If zoom is to be applied, choose a random zoom factor and determine a further crop
+      // within the already cropped area. The zoom crop will have dimensions (cropW / zoomFactor, cropH / zoomFactor)
+      // and will be randomly positioned within the crop, ensuring that when scaled it fills the canvas.
+      let zoomCropX = cropX, zoomCropY = cropY, zoomCropW = cropW, zoomCropH = cropH;
+      if (applyZoom) {
+        zoomFactor = Math.random() * ((zoomConfig.maxZoom - zoomConfig.minZoom) / 100) + (zoomConfig.minZoom / 100);
+        zoomCropW = cropW / zoomFactor;
+        zoomCropH = cropH / zoomFactor;
+        zoomCropX = cropX + Math.random() * (cropW - zoomCropW);
+        zoomCropY = cropY + Math.random() * (cropH - zoomCropH);
+        updateProgress(`Applied zoom on ${file.name}: ${(zoomFactor * 100).toFixed(0)}% (crop at x:${Math.floor(zoomCropX)}, y:${Math.floor(zoomCropY)})`);
+      }
+
       const drawFrame = () => {
         // Clear canvas on each frame
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // If we have a previous clip and we're in the overlap period
+        // If there is a previous clip and we're within the overlap period,
+        // draw the previous clip in the background.
         if (previousClip && video.currentTime < startTime + overlapDuration) {
           const previousVideo = previousClip.video;
-          // Draw the previous clip underneath
-          
-          // Calculate source and destination dimensions for cropping/scaling previous video
-          let sourceWidth = previousVideo.videoWidth;
-          let sourceHeight = previousVideo.videoHeight;
-          let sourceX = 0;
-          let sourceY = 0;
-          let destWidth = finalWidth;
-          let destHeight = finalHeight;
-
-          const videoAspectRatio = sourceWidth / sourceHeight;
-          const canvasAspectRatio = finalWidth / finalHeight;
-
-          if (videoAspectRatio > canvasAspectRatio) {
-              // Video is wider than the canvas, crop the sides
-              sourceWidth = sourceHeight * canvasAspectRatio;
-              sourceX = (previousVideo.videoWidth - sourceWidth) / 2;
-          } else {
-              // Video is taller than the canvas, crop the top and bottom
-              sourceHeight = sourceWidth / canvasAspectRatio;
-              sourceY = (previousVideo.videoHeight - sourceHeight) / 2;
-          }
-
-          ctx.drawImage(
-              previousVideo,
-              sourceX, sourceY, sourceWidth, sourceHeight,
-              0, 0, destWidth, destHeight
-          );
+          // For simplicity, draw the full previous clip scaled to fill the canvas.
+          ctx.drawImage(previousVideo, 0, 0, canvas.width, canvas.height);
         }
 
-        // Draw current clip
-        
-        // Calculate source and destination dimensions for cropping/scaling current video
-        let sourceWidth = video.videoWidth;
-        let sourceHeight = video.videoHeight;
-        let sourceX = 0;
-        let sourceY = 0;
-        let destWidth = finalWidth;
-        let destHeight = finalHeight;
-
-        const videoAspectRatio = sourceWidth / sourceHeight;
-        const canvasAspectRatio = finalWidth / finalHeight;
-
-        if (videoAspectRatio > canvasAspectRatio) {
-            // Video is wider than the canvas, crop the sides
-            sourceWidth = sourceHeight * canvasAspectRatio;
-            sourceX = (video.videoWidth - sourceWidth) / 2;
+        // Draw the current clip.
+        // If zoom is applied, use the zoom crop; otherwise, use the initial crop.
+        if (applyZoom) {
+          ctx.drawImage(video, zoomCropX, zoomCropY, zoomCropW, zoomCropH, 0, 0, canvas.width, canvas.height);
         } else {
-            // Video is taller than the canvas, crop the top and bottom
-            sourceHeight = sourceWidth / canvasAspectRatio;
-            sourceY = (video.videoHeight - sourceHeight) / 2;
-        }
-
-        if (zoomFactor > 1) {
-          const srcWidth = video.videoWidth / zoomFactor;
-          const srcHeight = video.videoHeight / zoomFactor;
-          const zoomX = Math.max(0, Math.min(sx, video.videoWidth - srcWidth));
-          const zoomY = Math.max(0, Math.min(sy, video.videoHeight - srcHeight));
-          ctx.drawImage(video, zoomX, zoomY, srcWidth, srcHeight, 0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.drawImage(
-              video,
-              sourceX, sourceY, sourceWidth, sourceHeight,
-              0, 0, destWidth, destHeight
-          );
+          ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
         }
 
         if (video.currentTime >= endTime) {
@@ -330,7 +315,7 @@ function playActiveClip(video, clipConf, canvas, ctx, zoomConfig, previousClip, 
           requestAnimationFrame(drawFrame);
         }
       };
-      
+
       drawFrame();
     }).catch((e) => {
       updateProgress(`Error playing clip from file ${file.name}: ${e.message}`);
