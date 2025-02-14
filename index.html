@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Random Video Editor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Random Video Editor</h1>
+  <form id="video-form">
+    <label for="video-files">Select Video Files:</label>
+    <input type="file" id="video-files" multiple accept="video/*">
+    
+    <label for="final-length">Final Video Length (seconds):</label>
+    <input type="number" id="final-length" min="1">
+    
+    <label for="min-clip-length">Min Clip Length (%):</label>
+    <input type="number" id="min-clip-length" min="1" max="100">
+    
+    <label for="max-clip-length">Max Clip Length (%):</label>
+    <input type="number" id="max-clip-length" min="1" max="100">
+    
+    <label for="zoom-probability">Zoom Probability (%):</label>
+    <input type="number" id="zoom-probability" min="0" max="100" value="30">
+    
+    <label for="min-zoom">Min Zoom (%):</label>
+    <input type="number" id="min-zoom" min="100" value="120">
+    
+    <label for="max-zoom">Max Zoom (%):</label>
+    <input type="number" id="max-zoom" min="100" value="150">
+    
+    <label for="video-width">Video Width (px):</label>
+    <input type="number" id="video-width" min="1" value="1080">
+    
+    <label for="video-height">Video Height (px):</label>
+    <input type="number" id="video-height" min="1" value="1920">
+    
+    <button type="button" id="start-button">Start Editing</button>
+  </form>
+  
+  <div id="status"></div>
+  <video id="output-video" controls></video>
+  <button id="download-button" style="display: none;">DOWNLOAD</button>
+  
+  <script src="script.js"></script>
+</body>
+</html>
