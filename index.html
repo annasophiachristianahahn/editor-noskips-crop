@@ -1,3 +1,4 @@
+<!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,28 +14,28 @@
     <input type="file" id="video-files" multiple accept="video/*">
     
     <label for="final-length">Final Video Length (seconds):</label>
-    <input type="number" id="final-length" min="1">
+    <input type="number" id="final-length" min="1" value="30">
     
+    <label for="video-width">Video Width:</label>
+    <input type="number" id="video-width" min="1" value="1080">
+    
+    <label for="video-height">Video Height:</label>
+    <input type="number" id="video-height" min="1" value="1920">
+
     <label for="min-clip-length">Min Clip Length (%):</label>
-    <input type="number" id="min-clip-length" min="1" max="100">
+    <input type="number" id="min-clip-length" min="1" max="100" value="11">
     
     <label for="max-clip-length">Max Clip Length (%):</label>
-    <input type="number" id="max-clip-length" min="1" max="100">
+    <input type="number" id="max-clip-length" min="1" max="100" value="80">
     
     <label for="zoom-probability">Zoom Probability (%):</label>
-    <input type="number" id="zoom-probability" min="0" max="100" value="30">
+    <input type="number" id="zoom-probability" min="0" max="100" value="20">
     
     <label for="min-zoom">Min Zoom (%):</label>
     <input type="number" id="min-zoom" min="100" value="120">
     
     <label for="max-zoom">Max Zoom (%):</label>
-    <input type="number" id="max-zoom" min="100" value="150">
-    
-    <label for="video-width">Video Width (px):</label>
-    <input type="number" id="video-width" min="1" value="1080">
-    
-    <label for="video-height">Video Height (px):</label>
-    <input type="number" id="video-height" min="1" value="1920">
+    <input type="number" id="max-zoom" min="100" value="250">
     
     <button type="button" id="start-button">Start Editing</button>
   </form>
