@@ -55,7 +55,7 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
   const ctx = canvas.getContext('2d');
   const chunks = [];
 
-  // Set canvas dimensions from the provided values.
+  // Set canvas dimensions from the provided inputs.
   canvas.width = finalWidth;
   canvas.height = finalHeight;
 
@@ -97,7 +97,7 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     };
   };
 
-  // Build randomized clip configurations until total duration reaches finalLength
+  // Build randomized clip configurations until total duration meets or exceeds finalLength.
   let totalDuration = 0;
   let lastFile = null;
   const clipConfs = [];
@@ -116,10 +116,10 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     clipConfs.push({ file: randFile, startTime, clipLength });
     totalDuration += clipLength;
     lastFile = randFile;
-    updateProgress(`Added clip from ${randFile.name}: start=${startTime.toFixed(2)}s, length=${clipLength.toFixed(2)}s. Total duration: ${totalDuration.toFixed(2)}s`);
+    updateProgress(`Added clip from ${randFile.name}: start=${startTime.toFixed(2)}s, length=${clipLength.toFixed(2)}s. Total planned duration: ${totalDuration.toFixed(2)}s`);
   }
 
-  // Create 4 video elements for a larger preloading pipeline
+  // Create 4 video elements for a larger preloading pipeline.
   const videoPlayers = [];
   for (let i = 0; i < 4; i++) {
     const video = document.createElement('video');
@@ -128,17 +128,15 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     videoPlayers.push(video);
   }
 
-  // Preload initial clips into the video players.
+  // Preload the first clip into slot 0.
   if (clipConfs.length === 0) {
     updateProgress('No clips to process.');
     return;
   }
-  // Preload the first clip into slot 0
   const firstClip = clipConfs.shift();
   updateProgress(`Preloading first clip from ${firstClip.file.name} (start: ${firstClip.startTime.toFixed(2)}s, length: ${firstClip.clipLength.toFixed(2)}s) into slot 0`);
   await preloadClip(videoPlayers[0], firstClip.file, firstClip.startTime, firstClip.clipLength);
   videoPlayers[0].clipConf = firstClip;
-  // (Canvas dimensions are now fixed from the input values.)
 
   // Preload remaining clips into slots 1 to 3, if available.
   for (let i = 1; i < videoPlayers.length; i++) {
@@ -150,27 +148,41 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     }
   }
 
+  // Start recording and capture the recording start time.
   recorder.start();
+  const recordStartTime = performance.now();
   updateProgress('Recording started.');
+
+  // Schedule the recorder to stop exactly after finalLength seconds.
+  setTimeout(() => {
+    recorder.stop();
+    updateProgress('Recording stopped.');
+  }, finalLength * 1000);
 
   let currentPlayerIndex = 0;
   let previousClip = null;
 
   while (true) {
+    // Before starting a new clip, check if final length has been reached.
+    if (performance.now() - recordStartTime >= finalLength * 1000) break;
+
     const currentVideo = videoPlayers[currentPlayerIndex];
     const currentClip = currentVideo.clipConf;
 
-    // Start playing current clip
+    // Start playing current clip.
+    // Pass the recordStartTime and finalLength so that each clip stops drawing when time is up.
     const playPromise = playActiveClip(
       currentVideo,
       currentClip,
       canvas,
       ctx,
       { zoomProbability, minZoom, maxZoom },
-      previousClip // Pass the previous clip info
+      previousClip,
+      recordStartTime,
+      finalLength
     );
 
-    // Preload next clip if available
+    // Preload next clip if available.
     if (clipConfs.length > 0) {
       const upcoming = clipConfs.shift();
       await preloadClip(
@@ -182,23 +194,14 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
       videoPlayers[(currentPlayerIndex + 1) % videoPlayers.length].clipConf = upcoming;
     }
 
-    // Wait for current clip to finish
     await playPromise;
-
     if (clipConfs.length === 0) break;
-
     previousClip = {
       video: currentVideo,
       conf: currentClip
     };
     currentPlayerIndex = (currentPlayerIndex + 1) % videoPlayers.length;
   }
-
-  // Stop recording after the desired final length (in seconds)
-  setTimeout(() => {
-    recorder.stop();
-    updateProgress('Recording stopped.');
-  }, finalLength * 1000);
 }
 
 function getVideoDuration(file) {
@@ -219,7 +222,7 @@ function getRandomStartTime(duration, clipLength) {
   return Math.random() * (duration - clipLength);
 }
 
-// Preload a clip: set the source and currentTime, and resolve when the seek completes
+// Preload a clip: set the source and currentTime, and resolve when the seek completes.
 function preloadClip(video, file, startTime, clipLength) {
   return new Promise((resolve, reject) => {
     video.src = URL.createObjectURL(file);
@@ -232,67 +235,75 @@ function preloadClip(video, file, startTime, clipLength) {
   });
 }
 
-// Play the clip by drawing frames from the active video onto the canvas
-function playActiveClip(video, clipConf, canvas, ctx, zoomConfig, previousClip) {
+// Play the clip by drawing frames from the active video onto the canvas.
+// The zoom crop is now calculated once per clip (before drawing begins) and then re-used.
+// Also, each frame checks whether the overall recording duration has been reached.
+function playActiveClip(video, clipConf, canvas, ctx, zoomConfig, previousClip, recordStartTime, finalLength) {
   return new Promise((resolve, reject) => {
     const { startTime, clipLength, file } = clipConf;
-    const endTime = startTime + clipLength;
+    const clipEndTime = startTime + clipLength;
     const overlapDuration = 1.0; // 1 second overlap
 
     // Determine whether to apply zoom.
     let applyZoom = Math.random() < (zoomConfig.zoomProbability / 100);
-    // If applying zoom, pick a zoomFactor. (A factor of 1 means no zoom.)
     let zoomFactor = 1;
-    if (applyZoom) {
-      zoomFactor = Math.random() * ((zoomConfig.maxZoom - zoomConfig.minZoom) / 100) + (zoomConfig.minZoom / 100);
-      updateProgress(`Applied zoom on ${file.name}: ${(zoomFactor * 100).toFixed(0)}%`);
+    let fixedOffsetX, fixedOffsetY, zoomedSW, zoomedSH;
+
+    // Compute the base crop rectangle matching the canvas aspect ratio.
+    const videoAspect = video.videoWidth / video.videoHeight;
+    const canvasAspect = canvas.width / canvas.height;
+    let baseSX, baseSY, baseSW, baseSH;
+    if (videoAspect > canvasAspect) {
+      // Video is wider than needed.
+      baseSH = video.videoHeight;
+      baseSW = video.videoHeight * canvasAspect;
+      baseSX = (video.videoWidth - baseSW) / 2;
+      baseSY = 0;
+    } else {
+      // Video is taller than needed.
+      baseSW = video.videoWidth;
+      baseSH = video.videoWidth / canvasAspect;
+      baseSY = (video.videoHeight - baseSH) / 2;
+      baseSX = 0;
     }
 
+    if (applyZoom) {
+      // Choose a zoom factor (1 means no zoom). Otherwise, a factor >1 zooms in.
+      zoomFactor = Math.random() * ((zoomConfig.maxZoom - zoomConfig.minZoom) / 100) + (zoomConfig.minZoom / 100);
+      // Calculate the zoomed crop rectangle once.
+      zoomedSW = baseSW / zoomFactor;
+      zoomedSH = baseSH / zoomFactor;
+      const maxOffsetX = baseSW - zoomedSW;
+      const maxOffsetY = baseSH - zoomedSH;
+      fixedOffsetX = baseSX + Math.random() * maxOffsetX;
+      fixedOffsetY = baseSY + Math.random() * maxOffsetY;
+      updateProgress(`Applied zoom on ${file.name}: ${(zoomFactor * 100).toFixed(0)}%, fixed crop at x:${fixedOffsetX.toFixed(0)}, y:${fixedOffsetY.toFixed(0)}`);
+    }
+    
     video.play().then(() => {
       const drawFrame = () => {
-        // Clear canvas on each frame
+        // Stop drawing if overall recording time is reached.
+        if (performance.now() - recordStartTime >= finalLength * 1000) {
+          resolve();
+          return;
+        }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // If we have a previous clip and we're in the overlap period, draw it underneath.
+        // If we have a previous clip and are in the overlap period, draw it underneath.
         if (previousClip && video.currentTime < startTime + overlapDuration) {
           const previousVideo = previousClip.video;
           ctx.drawImage(previousVideo, 0, 0, canvas.width, canvas.height);
         }
 
-        // First, compute a base crop from the video that matches the canvas aspect ratio.
-        const videoAspect = video.videoWidth / video.videoHeight;
-        const canvasAspect = canvas.width / canvas.height;
-        let baseSX, baseSY, baseSW, baseSH;
-        if (videoAspect > canvasAspect) {
-          // Video is wider than canvas ratio — crop sides.
-          baseSH = video.videoHeight;
-          baseSW = video.videoHeight * canvasAspect;
-          baseSX = (video.videoWidth - baseSW) / 2;
-          baseSY = 0;
-        } else {
-          // Video is taller than canvas ratio — crop top and bottom.
-          baseSW = video.videoWidth;
-          baseSH = video.videoWidth / canvasAspect;
-          baseSY = (video.videoHeight - baseSH) / 2;
-          baseSX = 0;
-        }
-
-        // If zoom is applied, further crop a sub-rectangle inside the base crop.
         if (zoomFactor > 1) {
-          const zoomedSW = baseSW / zoomFactor;
-          const zoomedSH = baseSH / zoomFactor;
-          const maxOffsetX = baseSW - zoomedSW;
-          const maxOffsetY = baseSH - zoomedSH;
-          // Choose a random offset within the allowed range.
-          const offsetX = baseSX + Math.random() * maxOffsetX;
-          const offsetY = baseSY + Math.random() * maxOffsetY;
-          ctx.drawImage(video, offsetX, offsetY, zoomedSW, zoomedSH, 0, 0, canvas.width, canvas.height);
+          // Use the fixed zoom crop computed once for this clip.
+          ctx.drawImage(video, fixedOffsetX, fixedOffsetY, zoomedSW, zoomedSH, 0, 0, canvas.width, canvas.height);
         } else {
-          // No zoom: draw the base crop.
+          // No zoom: use the base crop.
           ctx.drawImage(video, baseSX, baseSY, baseSW, baseSH, 0, 0, canvas.width, canvas.height);
         }
 
-        if (video.currentTime >= endTime) {
+        if (video.currentTime >= clipEndTime) {
           resolve();
         } else {
           requestAnimationFrame(drawFrame);
