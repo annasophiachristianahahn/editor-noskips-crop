@@ -150,8 +150,9 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
 
   let currentPlayerIndex = 0;
   let previousClip = null;
+  let recordedDuration = 0;
   
-  while (true) {
+  while (recordedDuration < finalLength) {
     const currentVideo = videoPlayers[currentPlayerIndex];
     const currentClip = currentVideo.clipConf;
     
@@ -182,6 +183,8 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     // Wait for current clip to finish
     await playPromise;
     
+    recordedDuration += currentClip.clipLength;
+    
     if (clipConfs.length === 0) break;
     
     previousClip = {
@@ -191,11 +194,8 @@ async function processVideos(files, finalLength, minClipLength, maxClipLength, z
     currentPlayerIndex = (currentPlayerIndex + 1) % videoPlayers.length;
   }
 
-  // Stop recording after the desired final length (in seconds)
-  setTimeout(() => {
-    recorder.stop();
-    updateProgress('Recording stopped.');
-  }, finalLength * 1000);
+  recorder.stop();
+  updateProgress('Recording stopped.');
 }
 
 function getVideoDuration(file) {
@@ -311,9 +311,11 @@ function playActiveClip(video, clipConf, canvas, ctx, zoomConfig, previousClip, 
         }
 
         if (zoomFactor > 1) {
-          const srcWidth = canvas.width / zoomFactor;
-          const srcHeight = canvas.height / zoomFactor;
-          ctx.drawImage(video, sx, sy, srcWidth, srcHeight, 0, 0, canvas.width, canvas.height);
+          const srcWidth = video.videoWidth / zoomFactor;
+          const srcHeight = video.videoHeight / zoomFactor;
+          const zoomX = Math.max(0, Math.min(sx, video.videoWidth - srcWidth));
+          const zoomY = Math.max(0, Math.min(sy, video.videoHeight - srcHeight));
+          ctx.drawImage(video, zoomX, zoomY, srcWidth, srcHeight, 0, 0, canvas.width, canvas.height);
         } else {
           ctx.drawImage(
               video,
